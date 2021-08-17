@@ -2,13 +2,13 @@ import os
 import re
 from collections import defaultdict
 import numpy as np
-from numpy.lib.function_base import gradient
 import pandas as pd
 import matplotlib as mpl
 from copy import deepcopy
 from functools import cache
 import time
-from matplotlib import pyplot as plt
+from itertools import chain
+
 
 mpl.use('TkAgg')
 from scipy import signal
@@ -42,6 +42,18 @@ def rms_from_psd(psd, frequency_step):
 
 @cache
 def process_dataset(data_set_name):
+    """
+    This function will look inside the "/data" folder for files with a name matching `{data_set_name}_{number}.xslx`.
+    The function will then do some signal conditioning (moving averages) and calculate:
+    * displacement (moving avg)
+    * velocity (moving avg)
+    * acceleration (moving avg)
+    * power
+    The function uses the `@cache` decorator, which implements an LRU cache so that data sets are only processed once.
+    When the function is called with the same argument twice, it quickly returns the result the second time.
+    :param data_set_name:
+    :return:
+    """
     dir_contents = os.listdir(data_dir)
     # read excel contents
     ds = []
@@ -92,159 +104,71 @@ def process_dataset(data_set_name):
     return ds
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
+def _init_excel_sheet(workbook_name: str, processed_data):
+    """
+    A function to initiate a new excel sheet.
+    This will use the workbook name to determine if the sheet if a time or frequency domain sheet
+    And will use the processed data dictionary to determine the length of the independent axis
+    :param workbook_name:
+    :param processed_data:
+    :return:
+    """
+    if workbook_name.startswith("psd_"):
+        label = "f(Hz)"
+        axis_name = workbook_name.replace("_crms", "").replace("_rms", "")
+        axis_name = f"{axis_name}_f"
+    else:
+        label = "t(s)"
+        axis_name = "time"
+    return {label: processed_data[0][axis_name][:len(processed_data[0][workbook_name])]}
+
+
+def _populate_excel_sheet(workbook_name, processed_data, excel_writer, sheet, sheet_name):
+    # add the force columns
+    seq_labels = []
+    for subset in processed_data:
+        seq_label = str(subset['seq'])
+        seq_labels.append(seq_label)
+        sheet[seq_label] = subset[workbook_name]
+    # create the averages
+    avg = []
+    std_dev = []
+    for i in range(len(sheet[seq_labels[0]])):
+        row = [sheet[label][i] for label in seq_labels]
+        avg.append(np.mean(row))
+        std_dev.append(np.std(row))
+    sheet['avg'] = np.array(avg)
+    sheet['std_dev'] = np.array(std_dev)
+    df = pd.DataFrame(sheet)
+    df.to_excel(excel_writer, sheet_name=sheet_name)
+
+
+def main():
     sets = ['N_FN', 'N_PEG', 'N_COL6', 'BareSi']
-    TIME_WORKBOOKS = [
+    time_workbooks = [
         'power_yW', 'force_pn', 'velocity_pm_per_s_moving_avg', 'acceleration_pg_moving_avg',
     ]
-    TIME_SHEETS = [zip([book_name]*len(sets), sets) for book_name in TIME_WORKBOOKS]
-    PSD_WORKBOOKS = [f"psd_{book}" for book in TIME_WORKBOOKS]
-    PSD_SHEETS = [zip([book_name]*len(sets), sets) for book_name in PSD_WORKBOOKS]
-    CRMS_WORKBOOKS = [f"{book}_crms" for book in PSD_WORKBOOKS]
-    CRMS_SHEETS = [zip([book_name]*len(sets), sets) for book_name in CRMS_WORKBOOKS]
-    RMS_WORKBOOKS = [f"{book}_rms" for book in PSD_WORKBOOKS]
-    RMS_SHEETS = [zip([book_name]*len(sets), sets) for book_name in CRMS_WORKBOOKS]
-    # make the time workbook
-    processed_sets = []
-    make_time_workbooks = True
-    for workbook_name in TIME_WORKBOOKS:
-        if not make_time_workbooks:
-            break
-        writer = pd.ExcelWriter(f"{workbook_name}.xlsx")
+    psd_workbooks = [f"psd_{book}" for book in time_workbooks]
+    crms_workbooks = [f"{book}_crms" for book in psd_workbooks]
+    rms_workbooks = [f"{book}_rms" for book in psd_workbooks]
+    # to skip a workbook, remove it from the chain
+    workbooks = chain(time_workbooks, psd_workbooks, crms_workbooks, rms_workbooks)
+    for workbook_name in workbooks:
+        workbook_path = os.path.join("output", f"{workbook_name}.xlsx")
+        writer = pd.ExcelWriter(workbook_path)
         for set_name in sets:
             print(f"Creating {workbook_name}.xlsx:{set_name}")
             t = time.time_ns()
             processed = process_dataset(set_name)
             print(f"Data set processing call took {(time.time_ns()-t) / 1e6} ms")
-            sheet = {"t(s)": processed[0]['time'][:len(processed[0][workbook_name])]}
-            # add the force columns
-            seq_labels = []
-            for subset in processed:
-                seq_label = str(subset['seq'])
-                seq_labels.append(seq_label)
-                sheet[seq_label] = subset[workbook_name]
-            # create the averages
-            avg = []
-            std_dev = []
-            for i in range(len(sheet[seq_labels[0]])):
-                row = [sheet[label][i] for label in seq_labels]
-                avg.append(np.mean(row))
-                std_dev.append(np.std(row))
-            sheet['avg'] = np.array(avg)
-            sheet['std_dev'] = np.array(std_dev)
-            df = pd.DataFrame(sheet)
-            df.to_excel(writer, sheet_name=set_name)
-            print(f"Done.")
-        print("Writing to disk...")
-        t = time.time_ns()
-        writer.save()
-        print(f"Writing to disk took {(time.time_ns()-t)/1e6} ms")
-
-    make_psd_workbooks = True
-    for workbook_name in PSD_WORKBOOKS:
-        if not make_psd_workbooks:
-            break
-        writer = pd.ExcelWriter(f"{workbook_name}.xlsx")
-        for set_name in sets:
-            print(f"Creating {workbook_name}.xlsx:{set_name}")
-            t = time.time_ns()
-            processed = process_dataset(set_name)
-            print(f"Data set processing call took {(time.time_ns()-t) / 1e6} ms")
-            sheet = {"f(Hz)": processed[0][f"{workbook_name}_f"][:len(processed[0][workbook_name])]}
-            # add the force columns
-            seq_labels = []
-            for subset in processed:
-                seq_label = str(subset['seq'])
-                seq_labels.append(seq_label)
-                sheet[seq_label] = subset[workbook_name]
-            # create the averages
-            avg = []
-            std_dev = []
-            for i in range(len(sheet[seq_labels[0]])):
-                row = [sheet[label][i] for label in seq_labels]
-                avg.append(np.mean(row))
-                std_dev.append(np.std(row))
-            sheet['avg'] = np.array(avg)
-            sheet['std_dev'] = np.array(std_dev)
-            df = pd.DataFrame(sheet)
-            df.to_excel(writer, sheet_name=set_name)
-            print(f"Done.")
-        print("Writing to disk...")
-        t = time.time_ns()
-        writer.save()
-        print(f"Writing to disk took {(time.time_ns()-t)/1e6} ms")
-
-    make_crms_workbooks = True
-    for workbook_name in CRMS_WORKBOOKS:
-        if not make_crms_workbooks:
-            break
-        writer = pd.ExcelWriter(f"{workbook_name}.xlsx")
-        for set_name in sets:
-            print(f"Creating {workbook_name}.xlsx:{set_name}")
-            t = time.time_ns()
-            processed = process_dataset(set_name)
-            print(f"Data set processing call took {(time.time_ns()-t) / 1e6} ms")
-            sheet = {"f(Hz)": processed[0][f"{workbook_name.replace('_crms', '_f')}"][:len(processed[0][workbook_name])]}
-            # add the force columns
-            seq_labels = []
-            for subset in processed:
-                seq_label = str(subset['seq'])
-                seq_labels.append(seq_label)
-                sheet[seq_label] = subset[workbook_name]
-
-            # create the averages
-            avg = []
-            std_dev = []
-            for i in range(len(sheet[seq_labels[0]])):
-                row = [sheet[label][i] for label in seq_labels]
-                avg.append(np.mean(row))
-                std_dev.append(np.std(row))
-            sheet['avg'] = np.array(avg)
-            sheet['std_dev'] = np.array(std_dev)
-            df = pd.DataFrame(sheet)
-            df.to_excel(writer, sheet_name=set_name)
-            print(f"Done.")
-        print("Writing to disk...")
-        t = time.time_ns()
-        writer.save()
-        print(f"Writing to disk took {(time.time_ns()-t)/1e6} ms")
-    
-    make_rms_workbooks = True
-    for workbook_name in RMS_WORKBOOKS:
-        if not make_rms_workbooks:
-            break
-        writer = pd.ExcelWriter(f"{workbook_name}.xlsx")
-        for set_name in sets:
-            print(f"Creating {workbook_name}.xlsx:{set_name}")
-            t = time.time_ns()
-            processed = process_dataset(set_name)
-            print(f"Data set processing call took {(time.time_ns()-t) / 1e6} ms")
-            sheet = {"f(Hz)": processed[0][f"{workbook_name.replace('_rms', '_f')}"][:len(processed[0][workbook_name])]}
-            # add the force columns
-            seq_labels = []
-            for subset in processed:
-                seq_label = str(subset['seq'])
-                seq_labels.append(seq_label)
-                sheet[seq_label] = subset[workbook_name]
-
-            # create the averages
-            avg = []
-            std_dev = []
-            for i in range(len(sheet[seq_labels[0]])):
-                row = [sheet[label][i] for label in seq_labels]
-                avg.append(np.mean(row))
-                std_dev.append(np.std(row))
-            sheet['avg'] = np.array(avg)
-            sheet['std_dev'] = np.array(std_dev)
-            df = pd.DataFrame(sheet)
-            df.to_excel(writer, sheet_name=set_name)
-            print(f"Done.")
+            sheet = _init_excel_sheet(workbook_name, processed)
+            _populate_excel_sheet(workbook_name, processed, writer, sheet, set_name)
         print("Writing to disk...")
         t = time.time_ns()
         writer.save()
         print(f"Writing to disk took {(time.time_ns()-t)/1e6} ms")
 
 
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+if __name__ == '__main__':
+    #  when the script is called, run the main function
+    main()
