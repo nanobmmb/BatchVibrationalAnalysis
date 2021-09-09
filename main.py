@@ -1,13 +1,16 @@
 import os
 import re
+import sys
 from collections import defaultdict
 import numpy as np
+from scipy.signal import butter, sosfilt
 import pandas as pd
 import matplotlib as mpl
 from copy import deepcopy
 from functools import cache
 import time
 from itertools import chain
+import argparse
 
 
 mpl.use('TkAgg')
@@ -16,6 +19,17 @@ from scipy import signal
 data_dir = 'data'
 
 data_sets = defaultdict(list)
+
+# initialize the butterworth filter
+cutoff_freq_hz = 0.06103515625
+bw_sos = butter(
+    6,
+    cutoff_freq_hz,
+    btype="highpass",
+    analog=False,
+    output='sos',
+    fs=100
+)
 
 
 def moving_average(x, w):
@@ -41,7 +55,7 @@ def rms_from_psd(psd, frequency_step):
 
 
 @cache
-def process_dataset(data_set_name):
+def process_dataset(data_set_name, filter=False):
     """
     This function will look inside the "/data" folder for files with a name matching `{data_set_name}_{number}.xslx`.
     The function will then do some signal conditioning (moving averages) and calculate:
@@ -97,6 +111,9 @@ def process_dataset(data_set_name):
             measurement = subset[key]
             time = subset['time'][:len(measurement)]
             samples_per_segment = 16384
+            if filter:
+                filtered_measurement = sosfilt(bw_sos, measurement)
+                measurement = filtered_measurement
             f, pxx = get_psd(measurement, fs, samples_per_segment)
             subset[f"psd_{key}"] = deepcopy(pxx)
             subset[f"psd_{key}_f"] = f
@@ -143,7 +160,7 @@ def _populate_excel_sheet(workbook_name, processed_data, excel_writer, sheet, sh
     df.to_excel(excel_writer, sheet_name=sheet_name)
 
 
-def main():
+def main(filter):
     sets = ['N_FN', 'N_PEG', 'N_COL6', 'BareSi']
     time_workbooks = [
         'power_yW', 'force_pn', 'velocity_pm_per_s_moving_avg', 'acceleration_pg_moving_avg',
@@ -159,7 +176,7 @@ def main():
         for set_name in sets:
             print(f"Creating {workbook_name}.xlsx:{set_name}")
             t = time.time_ns()
-            processed = process_dataset(set_name)
+            processed = process_dataset(set_name, filter=filter)
             print(f"Data set processing call took {(time.time_ns()-t) / 1e6} ms")
             sheet = _init_excel_sheet(workbook_name, processed)
             _populate_excel_sheet(workbook_name, processed, writer, sheet, set_name)
@@ -171,4 +188,7 @@ def main():
 
 if __name__ == '__main__':
     #  when the script is called, run the main function
-    main()
+    parser = argparse.ArgumentParser(description='AFM frequency analysis processing pipeline')
+    parser.add_argument('-f', '--filter', default=False, help="apply BW highpass filter", action="store_true")
+    args = parser.parse_args()
+    main(args.filter)

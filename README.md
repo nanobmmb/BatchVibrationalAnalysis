@@ -21,5 +21,5 @@ python -m venv venv
 ```
 * activate the virtual environment and install the prerequisites by running the command illustrated below
 ![activate-install](img/activate_and_install.png)
-* Run `python main.py` to run the script
+* Run `python main.py [-f]` to run the script, including `-f` will apply a high-pass butterworth filter with `fc=0.06103515625`
 ![img.png](img/running.png)
