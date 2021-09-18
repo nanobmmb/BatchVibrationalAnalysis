@@ -3,7 +3,7 @@
 ### Project structure
 
 #### Directories:
-* `/data`: directory housing input data in TXT formats with the name `N_{Sample Type}_{Number}.txt`
+* `/data`: directory housing input data in TXT formats with the name `{Sample}_{Number}.txt`
 * `/output`: create this directory (folder) where the main script will save the generated spreadsheets of procesed data 
 
 #### Files:
