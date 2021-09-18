@@ -21,14 +21,14 @@ data_dir = 'data'
 data_sets = defaultdict(list)
 
 # initialize the butterworth filter
-cutoff_freq_hz = 0.06103515625
+cutoff_freq_hz = 0.06103515625  # cutoff frequency
 bw_sos = butter(
     6,
     cutoff_freq_hz,
     btype="highpass",
     analog=False,
     output='sos',
-    fs=100
+    fs=100  # sample frequency in Hz
 )
 
 
@@ -110,7 +110,7 @@ def process_dataset(data_set_name, filter=False):
         for key in signal_keys:
             measurement = subset[key]
             time = subset['time'][:len(measurement)]
-            samples_per_segment = 16384
+            samples_per_segment = 16384 # samples per window
             if filter:
                 filtered_measurement = sosfilt(bw_sos, measurement)
                 measurement = filtered_measurement
